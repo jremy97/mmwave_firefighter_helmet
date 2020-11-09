@@ -1,0 +1,57 @@
+<!--
+  This file will launch the rotating radar mapping demo for Capstone 1.
+
+  Author: Jeremy Francis
+ -->
+
+<launch>
+
+  <!-- Input arguments -->
+  <arg name="device" value="6843" doc="TI mmWave sensor device type [1443, 1642, 6843]"/>
+  <arg name="config" value="3d" doc="TI mmWave sensor device configuration [3d_best_range_res (not supported by 1642 EVM), 2d_best_range_res]"/>
+  <arg name="max_allowed_elevation_angle_deg" default="90" doc="Maximum allowed elevation angle in degrees for detected object data [0 > value >= 90]}"/>
+  <arg name="max_allowed_azimuth_angle_deg" default="90" doc="Maximum allowed azimuth angle in degrees for detected object data [0 > value >= 90]}"/>
+
+  <!-- mmWave_Manager node -->
+  <node pkg="ti_mmwave_rospkg" type="ti_mmwave_rospkg" name="ti_mmwave" ns="radar_0" output="screen">
+    <param name="command_port" value="/dev/ttyUSB0"  />
+    <param name="command_rate" value="115200"   />
+    <param name="data_port" value="/dev/ttyUSB1"  />
+    <param name="data_rate" value="921600"   />
+    <param name="max_allowed_elevation_angle_deg" value="$(arg max_allowed_elevation_angle_deg)"   />
+    <param name="max_allowed_azimuth_angle_deg" value="$(arg max_allowed_azimuth_angle_deg)"   />
+    <param name="frame_id" value="/ti_mmwave_0"/>
+    <remap from="/ti_mmwave/radar_scan_pcl" to="/ti_mmwave/radar_scan_pcl_0"/>
+  </node>
+
+  <!-- mmWaveQuickConfig node (terminates after configuring mmWave sensor) -->
+  <node pkg="ti_mmwave_rospkg" type="mmWaveQuickConfig" name="ti_mmwave_config" ns="radar_0" args="$(find ti_mmwave_rospkg)/cfg/6843AOP_3d.cfg" output="screen" />
+
+  <!-- Pointcloud filter node -->
+  <node pkg="mmwave_helmet" type="boxFilter.py" name="PC_filter" output="screen" />
+  <!-- Serial communication node -->
+  <node pkg="rosserial_python" type="serial_node.py" name="serial_node"> 
+	<param name="port" value="/dev/ttyACM0"/>
+	<param name="baud" value="57600"/>
+  </node> 
+
+  <node pkg="octomap_server" type="octomap_server_node" name="octomap_server">
+	<param name="resolution" value="0.05" />
+		
+	<!-- fixed map frame (set to 'map' if SLAM or localization running!) -->
+	<param name="frame_id" type="string" value="ti_mmwave_0" />
+		
+	<!-- maximum range to integrate (speedup!) -->
+	<param name="sensor_model/max_range" value="5.0" />
+		
+	<!-- data source to integrate (PointCloud2) -->
+	<remap from="cloud_in" to="/ti_mmwave/radar_scan_pcl_0" />
+   </node>
+
+  <node pkg="mmwave_helmet" name="tf_broadcaster" type="tf_broadcaster.py" respawn="false" output="screen" />
+
+  <node pkg="tf" type="static_transform_publisher" name="radar_baselink_0" args="0 -0.05 0.795 0 0 0 ti_mmwave_pcl ti_mmwave_0 100"/>
+
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find ti_mmwave_rospkg)/launch/rviz/ti_mmwave_multi.rviz"/>
+
+</launch>
