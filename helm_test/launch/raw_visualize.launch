@@ -1,0 +1,5 @@
+<launch>
+
+    <node pkg="rviz" type = "rviz" name="point_visualizer" args="-d $(find helm_test/rviz/rawvisualize.rviz" />
+
+</launch>
