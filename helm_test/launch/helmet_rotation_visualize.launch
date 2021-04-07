@@ -4,6 +4,4 @@
 
     <node pkg="rosbag" type="play" name="player" args="$(find helm_test)/bag/helm_data_new.bag"/>
 
-    <node pkg="my_fine_map" type = "fine_map" name = "fine_map" output = "screen"/>
-
 </launch>
