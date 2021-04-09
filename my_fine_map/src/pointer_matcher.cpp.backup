@@ -1,0 +1,327 @@
+//
+// Created by doug on 2021-03-31.
+//Calculates the transform between 3 sets of points
+//Very inefficient, n! scaling, only give it a few points
+//
+/*
+ * Formula:
+ * Find points in new scan with the closest intensity value to the previous one
+ * Reject any points with multiple matches
+ */
+
+#include "point_matcher.h"
+#include <chrono>
+
+/*struct PointPair {
+    //location of previous and current withing the vectors
+    int previous;
+    int current;
+    double intensityDifference;
+
+    //ratio of the difference between the matched points and the difference if a later point matched
+    double postPreviousRatio;
+    double postCurrentRatio;
+
+    //ratio of intensity differece to the higher of previous or current ration
+    //double uniqueness = std::max(intensityDifference/postPreviousRatio, intensityDifference/postCurrentRatio);
+};
+ */
+
+/*bool compareXYZI(pcl::PointXYZI a, pcl::PointXYZI b) {
+    return a.intensity > b.intensity;
+}*/
+bool compareX(pcl::PointXYZ a, pcl::PointXYZ b) {
+    return a.x > b.x;
+}
+bool compareY(pcl::PointXYZ a, pcl::PointXYZ b) {
+    return a.y > b.y;
+}
+bool compareZ(pcl::PointXYZ a, pcl::PointXYZ b) {
+    return a.z > b.z;
+}
+bool checkCorresponding(pcl::PointXYZ point, pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloud, double tolerance);
+
+/*
+//finds points on the new scan with intensities that best match those on the source cloud
+pcl::PointCloud<pcl::PointXYZI>::Ptr findIntensityMatch(pcl::PointCloud<pcl::PointXYZI>::Ptr previousPoints, pcl::PointCloud<pcl::PointXYZI>::Ptr currentPoints) {
+    ROS_INFO("Matching %li current points to %li previous points", currentPoints->size(), previousPoints->size());
+    std::vector<PointPair> pairs;
+    std::vector<int> previousPointMatches(previousPoints->size());
+    //sorts the input vectors to be in order
+    std::sort (previousPoints->begin(), previousPoints->end(), compareXYZI);
+    std::sort (currentPoints->begin(), currentPoints->end(), compareXYZI);
+
+    int previousIndex = 0;
+    int currentIndex = 0;
+
+    PointPair thisPair;
+
+    //finds the points that are closest to each each in intensity
+    while(previousIndex+1<previousPoints->size() && currentIndex+1<currentPoints->size()) {
+        thisPair.previous=previousIndex;
+        thisPair.current=currentIndex;
+        thisPair.intensityDifference=std::abs(previousPoints->at(thisPair.previous).intensity - currentPoints->at(thisPair.current).intensity);
+
+        //calculates the ratio for the latter
+        thisPair.postPreviousRatio=thisPair.intensityDifference/std::abs(previousPoints->at(thisPair.previous+1).intensity - currentPoints->at(thisPair.current).intensity);
+        thisPair.postCurrentRatio=thisPair.intensityDifference/std::abs(previousPoints->at(thisPair.previous).intensity - currentPoints->at(thisPair.current+1).intensity);
+
+        //finds the points that have the closest intensity match
+        if(thisPair.postPreviousRatio<1 && thisPair.postCurrentRatio<1) {
+            pairs.push_back(thisPair);
+            previousIndex++;
+            currentIndex++;
+        } else if (thisPair.postCurrentRatio>thisPair.postPreviousRatio) {
+            currentIndex++;
+        } else {
+            previousIndex++;
+        }
+    }
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr matchingCloud;
+
+    if(pairs.size()<6) {
+        ROS_INFO("Insufficient intensity matched points, only %li matches found.\nTaking most intense half of point cloud instead", pairs.size());
+        currentPoints->resize(currentPoints->size()/2+1);
+        matchingCloud = pcl::PointCloud<pcl::PointXYZI>::Ptr(currentPoints);
+    } else {
+        ROS_INFO("%li point matches found", pairs.size());
+        matchingCloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+        for(int n = 0; n<pairs.size(); n++) {
+
+            matchingCloud->push_back(pcl::PointXYZI(currentPoints->at(pairs[n].current)));
+
+        }
+    }
+    ROS_INFO("Finished intensity matching");
+    return matchingCloud;
+}
+ */
+
+/*
+Eigen::Matrix4f findTransform(pcl::PointCloud<pcl::PointXYZI>::Ptr currentFrame, pcl::PointCloud<pcl::PointXYZI>::Ptr previousFrame) {
+    pcl::IterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> icp;
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr intensityMatchedCloud = findIntensityMatch(previousFrame, currentFrame);
+    //sets the inputs for the icp, source to the thing being transformed from, target is the thing being transformed
+    icp.setInputSource (previousFrame);
+    icp.setInputTarget (intensityMatchedCloud);
+
+
+    // Set the max correspondence distance to (0.05m was used in the tutorial
+    icp.setMaxCorrespondenceDistance (0.2);
+    // Set the maximum number of iterations (criterion 1)
+    icp.setMaximumIterations (50);
+    // Set the transformation epsilon (criterion 2)
+    icp.setTransformationEpsilon (1e-8);
+    // Set the euclidean distance difference epsilon (criterion 3)
+    icp.setEuclideanFitnessEpsilon (1);
+
+    // Perform the alignment
+    pcl::PointCloud<pcl::PointXYZI> guessTransformFrame;
+    icp.align(guessTransformFrame);
+
+    // Obtain the transformation that aligned cloud_source to cloud_source_registered
+    return icp.getFinalTransformation ();
+
+}
+ */
+
+/*
+ * existingCloud is the cloud that contains existing points. To minimize compute time preselect likely points
+ * newCloud is the latest scan results. To minimize time prefilter existing points
+ * the matrix returned is the matrix of the most accurate transform
+ */
+
+//maximum correspondence using 3 points for initial guest
+Eigen::Matrix4f maximumCorrespondenceTransform(pcl::PointCloud<pcl::PointXYZ>::Ptr existingCloud, pcl::PointCloud<pcl::PointXYZ>::Ptr newCloud) {
+    //sorts the new point cloud by X, necessary for checkCorresponding to run, to avoid trying to sort newCloud in multiple threads
+    std::sort (newCloud->begin(), newCloud->end(), compareX);
+
+    pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> sampleICP;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr sourceSample;
+    sourceSample = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    pcl::PointCloud<pcl::PointXYZ>::Ptr destSample;
+    destSample = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    pcl::PointCloud<pcl::PointXYZ>::Ptr sampleTransformed;//point cloud resulting from the transform whose accuracy is being tested
+    sampleTransformed = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+    // Set the max correspondence distance to (0.05m was used in the tutorial
+    sampleICP.setMaxCorrespondenceDistance (0.05);
+    // Set the maximum number of iterations (criterion 1)
+    sampleICP.setMaximumIterations (50);
+    // Set the transformation epsilon (criterion 2)
+    sampleICP.setTransformationEpsilon (1e-8);
+    // Set the euclidean distance difference epsilon (criterion 3)
+    sampleICP.setEuclideanFitnessEpsilon (1);
+
+    // Perform the alignment
+    pcl::PointCloud<pcl::PointXYZ>::Ptr guessTransformFrame;
+    guessTransformFrame = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();;
+
+    // Obtain the transformation that aligned cloud_source to cloud_source_registered
+    Eigen::Matrix4f bestMatch;
+    int bestMatchCount = 0;
+    Eigen::Matrix4f sampleMatch;
+
+    long start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    for(int a = 0; a < existingCloud->size()-2; a++) {
+        for(int b = a+1; b <existingCloud->size()-1; b++) {
+            for(int c = b+1; c<existingCloud->size(); c++) {
+                for(int d = 0; d<newCloud->size()-2; d++) {
+                    for(int e = d+1; e<newCloud->size()-1; e++) {
+                        for(int f = e+1; f<newCloud->size(); f++) {
+                            //selects the sampled source points
+                            sourceSample->clear();
+                            sourceSample->push_back(existingCloud->at(a));
+                            sourceSample->push_back(existingCloud->at(b));
+                            sourceSample->push_back(existingCloud->at(c));
+                            //selected the sampled destination points
+                            destSample->clear();
+                            destSample->push_back(newCloud->at(d));
+                            destSample->push_back(newCloud->at(e));
+                            destSample->push_back(newCloud->at(f));
+
+                            //sets the inputs for the icp, source to the thing being transformed from, target is the thing being transformed
+                            sampleICP.setInputSource (sourceSample);
+                            sampleICP.setInputTarget (destSample);
+
+                            //calculates the ICP match
+                            sampleICP.align(*guessTransformFrame);
+
+                            sampleMatch = sampleICP.getFinalTransformation();
+
+                            pcl::transformPointCloud(*existingCloud, *sampleTransformed, sampleMatch);
+
+                            int sampleMatchCount = 0;
+                            for(int g = 0; g< existingCloud->size(); g++) {
+                                if(checkCorresponding(existingCloud->at(g), newCloud, CORRESPONDENCE_TOLERANCE)) sampleMatchCount++;
+                            }
+
+                            if(sampleMatchCount>bestMatchCount) {
+                                bestMatchCount = sampleMatchCount;
+                                bestMatch = sampleMatch;
+                                std::cout << "Current best: " << std::endl;
+                                std::cout << bestMatch << std::endl;
+                                std::cout << "With " << bestMatchCount << " matches" << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    long end = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    ROS_INFO("Processing one frame, taking %li ms", end-start);
+    return bestMatch;
+}
+
+Eigen::Matrix4f maximumCorrespondenceTransform(pcl::PointCloud<pcl::PointXYZ>::Ptr existingCloud, pcl::PointCloud<pcl::PointXYZ>::Ptr newCloud)
+
+//returns true if there is a corresponding point in the given pointcloud. pointCloud must be sorted by x in descending order first
+bool checkCorresponding(pcl::PointXYZ point, pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloud, double tolerance) {
+
+    //the sorts are to prep for binary sort, which can speed up the process, however it is not implemented.
+    pcl::PointCloud<pcl::PointXYZ>::Ptr xMatchList=pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+    //brackets for the possible location of the lowest point within tolerance
+    int lowerUpperBracket = pointCloud->size();
+    int lowerLowerBracket = -1;
+    //brackets for the possible location of the highest point within tolerance, because the goes high to, LowerBracket will be larger than UpperBracket
+    int upperUpperBracket = pointCloud->size();
+    int upperLowerBracket = -1;
+
+    //stores the target that the bracketing method is trying to hit
+    double target = point.x-tolerance;
+
+    //finds the lower end of the points in the x range where lowerLowerBracket is the index of the lowest in range point
+    while(lowerLowerBracket!=lowerUpperBracket-1) {
+        int middleValue = (lowerUpperBracket+lowerLowerBracket)/2;
+        if(pointCloud->at(middleValue).x > target) lowerLowerBracket = middleValue;
+        else lowerUpperBracket = middleValue;
+    }
+
+    //finds the upper end of the points in the x ranger where upperLowerBracket is the index of the highest in range point
+    target = point.x+tolerance;
+    while(upperLowerBracket!=upperUpperBracket-1) {
+        int middleValue = (upperUpperBracket+upperLowerBracket)/2;
+        if(pointCloud->at(middleValue).x > target) upperLowerBracket = middleValue;
+        else upperUpperBracket = middleValue;
+    }
+
+    //returns false if no items passed the previous test
+    if(upperUpperBracket==lowerUpperBracket) return false;
+
+    for(int n = upperUpperBracket; n < lowerUpperBracket; n++) {
+        xMatchList->push_back(pcl::PointXYZ(pointCloud->at(n)));
+    }
+
+
+    //begins process of checking for y matches
+    std::sort (xMatchList->begin(), xMatchList->end(), compareY);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr yMatchList=pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+    //brackets for the possible location of the lowest point within tolerance
+    lowerUpperBracket = xMatchList->size();
+    lowerLowerBracket = -1;
+    //brackets for the possible location of the highest point within tolerance, because the goes high to, LowerBracket will be larger than UpperBracket
+    upperUpperBracket = xMatchList->size();
+    upperLowerBracket = -1;
+
+    //stores the target that the bracketing method is trying to hit
+    target = point.y-tolerance;
+
+    //finds the lower end of the points in the x range where lowerLowerBracket is the index of the lowest in range point
+    while(lowerLowerBracket!=lowerUpperBracket-1) {
+        int middleValue = (lowerUpperBracket+lowerLowerBracket)/2;
+        if(xMatchList->at(middleValue).y > target) lowerLowerBracket = middleValue;
+        else lowerUpperBracket = middleValue;
+    }
+
+    //finds the upper end of the points in the x ranger where upperLowerBracket is the index of the highest in range point
+    target = point.y+tolerance;
+    while(upperLowerBracket!=upperUpperBracket-1) {
+        int middleValue = (upperUpperBracket+upperLowerBracket)/2;
+        if(xMatchList->at(middleValue).y > target) upperLowerBracket = middleValue;
+        else upperUpperBracket = middleValue;
+    }
+
+    //returns false if no items passed the previous test
+    if(upperUpperBracket==lowerUpperBracket) return false;
+
+    for(int n = upperUpperBracket; n < lowerUpperBracket; n++) {
+        yMatchList->push_back(pcl::PointXYZ(xMatchList->at(n)));
+    }
+
+
+    //begins process of checking for z matches
+    //brackets for the possible location of the lowest point within tolerance
+    lowerUpperBracket = yMatchList->size();
+    lowerLowerBracket = -1;
+    //brackets for the possible location of the highest point within tolerance, because the goes high to, LowerBracket will be larger than UpperBracket
+    upperUpperBracket = yMatchList->size();
+    upperLowerBracket = -1;
+
+    //stores the target that the bracketing method is trying to hit
+    target = point.z-tolerance;
+
+    //finds the lower end of the points in the x range where lowerLowerBracket is the index of the lowest in range point
+    while(lowerLowerBracket!=lowerUpperBracket-1) {
+        int middleValue = (lowerUpperBracket+lowerLowerBracket)/2;
+        if(yMatchList->at(middleValue).z > target) lowerLowerBracket = middleValue;
+        else lowerUpperBracket = middleValue;
+    }
+
+    //finds the upper end of the points in the x ranger where upperLowerBracket is the index of the highest in range point
+    target = point.z+tolerance;
+    while(upperLowerBracket!=upperUpperBracket-1) {
+        int middleValue = (upperUpperBracket+upperLowerBracket)/2;
+        if(yMatchList->at(middleValue).z > target) upperLowerBracket = middleValue;
+        else upperUpperBracket = middleValue;
+    }
+
+    //returns true if there are elements in the yMatch list, that had compatible z values
+    return upperUpperBracket < lowerUpperBracket;
+}
